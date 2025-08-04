@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_kaderim_stock_root" name="Analyse Stock" sequence="10"/>
+    <menuitem id="menu_kaderim_couverture" name="Couverture de Stock" parent="menu_kaderim_stock_root"/>
+</odoo>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_export_couverture_stock" model="ir.actions.server">
+        <field name="name">Exporter</field>
+        <field name="model_id" ref="model_couverture_stock"/>
+        <field name="binding_model_id" ref="model_couverture_stock"/>
+        <field name="state">code</field>
+        <field name="binding_view_types">tree</field>
+        <field name="code">
+            action = {
+                'type': 'ir.actions.report',
+                'report_type': 'qweb-pdf',
+                'report_name': 'module.couverture_stock_report',
+                'report_file': 'module.couverture_stock_report',
+                'name': 'Couverture Stock Export'
+            }
+        </field>
+    </record>
+</odoo>

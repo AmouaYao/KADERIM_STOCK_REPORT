@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_couverture_stock_user,couverture.stock user,model_couverture_stock,base.group_user,1,0,0,0
+access_couverture_stock_wizards_user,couverture.stock.wizards user,model_couverture_stock_wizards,base.group_user,1,1,1,1
