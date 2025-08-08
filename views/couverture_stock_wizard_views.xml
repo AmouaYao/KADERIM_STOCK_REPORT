@@ -13,44 +13,46 @@
                     <group>
                         <group string="Paramètres">
                             <field name="company_id"
+                                   readonly="1"
                                    options="{'no_create': True, 'no_edit': True}"/>
                             <field name="date_start"/>
                             <field name="date_end"/>
+                            <field name="marge_livraison"/>
                             <field name="couverture_cible"/>
                         </group>
-                        <group string="Options">
+
+                        <!-- Bloc Options caché -->
+                        <group string="Options" invisible="1">
                             <field name="auto_recalcul"/>
                             <field name="update_mode" invisible="auto_recalcul == False"/>
                         </group>
                     </group>
 
-                    <!-- Message informatif en mode automatique -->
-                    <div class="alert alert-info mt16"
-                         invisible = "auto_recalcul == False">
+                    <!-- Message informatif en mode automatique (caché pour l'instant)
+                    <div class="alert alert-info mt16" invisible="auto_recalcul == False">
                         <i class="fa fa-info-circle"/>
                         <strong>Mode automatique activé :</strong>
                         Le calcul se lance automatiquement à chaque modification des paramètres.
                     </div>
+                    -->
 
-                    <!-- Message d'aide -->
-                    <div class="alert alert-warning mt16"
-                         invisible="auto_recalcul == True">
+                    <!-- Message d'aide
+                    <div class="alert alert-warning mt16" invisible="auto_recalcul == True">
                         <i class="fa fa-lightbulb-o"/>
                         <strong>Conseil :</strong>
                         Activez le "Recalcul automatique" pour que les données se mettent à jour automatiquement
                         quand vous changez de société ou de dates.
                     </div>
+                    -->
                 </sheet>
 
                 <footer>
-                    <!-- Bouton de calcul manuel, caché en mode automatique -->
                     <button string="Lancer le calcul"
                             type="object"
                             name="action_lancer_calcul"
                             class="btn-primary"
                             invisible="auto_recalcul == True"/>
 
-                    <!-- Bouton pour voir les résultats en mode automatique -->
                     <button string="Voir les résultats"
                             type="object"
                             name="action_voir_resultats"

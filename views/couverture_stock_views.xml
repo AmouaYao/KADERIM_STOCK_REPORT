@@ -7,11 +7,11 @@
             <tree>
                 <field name="product_name"/>
                 <field name="product_barcode"/>
-                <field name="location_name"/>
                 <field name="total_en_stock"/>
                 <field name="total_vendu"/>
                 <field name="vmj"/>
                 <field name="couverture_stock_en_jours"/>
+                <field name="marge_livraison"/>
                 <field name="couverture_cible"/>
                 <field name="qte_a_commander"/>
                 <field name="company_name"/>
@@ -27,7 +27,7 @@
         <field name="context">{}</field>
     </record>
 
-    <menuitem id="menu_action_couverture_stock" name="Rapport de Couverture"
+    <!--<menuitem id="menu_action_couverture_stock" name="Rapport de Couverture"
               parent="menu_kaderim_couverture"
-              action="action_couverture_stock"/>
+              action="action_couverture_stock"/>-->
 </odoo>

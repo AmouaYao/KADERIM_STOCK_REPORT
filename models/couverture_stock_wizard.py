@@ -1,6 +1,9 @@
 from odoo import models, fields, api
 from odoo.exceptions import UserError
 from datetime import timedelta
+import io
+import base64
+import xlsxwriter
 
 
 class CouvertureStockWizard(models.TransientModel):
@@ -9,7 +12,8 @@ class CouvertureStockWizard(models.TransientModel):
 
     date_start = fields.Datetime(string="Date début", required=True)
     date_end = fields.Datetime(string="Date fin", required=True)
-    couverture_cible = fields.Integer(string="Couverture cible (jours)", default=30)
+    couverture_cible = fields.Integer(string="Couverture cible (jours)")
+    marge_livraison = fields.Integer(string="Marge de livraison (jours)")
 
     company_id = fields.Many2one(
         'res.company',
@@ -18,39 +22,43 @@ class CouvertureStockWizard(models.TransientModel):
         default=lambda self: self.env.company
     )
 
-    # Champ pour déclencher le recalcul automatique
     auto_recalcul = fields.Boolean(
         string="Recalcul automatique",
         default=True,
         help="Recalcule automatiquement quand la société ou les paramètres changent"
     )
 
-    # Champ pour choisir le mode de mise à jour
     update_mode = fields.Selection([
         ('replace', 'Remplacer toutes les données'),
         ('smart', 'Mise à jour intelligente (recommandé)')
     ], string="Mode de mise à jour", default='smart',
         help="Remplacer: supprime tout et recrée\nIntelligente: met à jour seulement les changements")
 
+    @api.onchange('date_start', 'date_end')
+    def _onchange_set_default_couverture_cible(self):
+        """Met automatiquement à jour la couverture cible selon la période choisie."""
+        if self.date_start and self.date_end and self.date_start <= self.date_end:
+            self.couverture_cible = (self.date_end - self.date_start).days
+
     @api.onchange('company_id')
     def _onchange_company_id(self):
-        """Déclenche automatiquement le recalcul quand la société change"""
         if self.auto_recalcul and self.company_id and self.date_start and self.date_end:
             self._auto_recalcul()
 
     @api.onchange('date_start', 'date_end', 'couverture_cible')
     def _onchange_dates_or_target(self):
-        """Recalcule aussi quand les dates ou la cible changent"""
+        if self.auto_recalcul and self.company_id and self.date_start and self.date_end:
+            self._auto_recalcul()
+
+    @api.onchange('marge_livraison')
+    def _onchange_marge_livraison(self):
         if self.auto_recalcul and self.company_id and self.date_start and self.date_end:
             self._auto_recalcul()
 
     def _auto_recalcul(self):
-        """Méthode privée pour le recalcul automatique"""
         try:
-            # Validation basique
             if not self.date_start or not self.date_end or not self.company_id:
                 return
-
             if self.date_start > self.date_end:
                 return {
                     'warning': {
@@ -58,111 +66,84 @@ class CouvertureStockWizard(models.TransientModel):
                         'message': 'La date de début doit être antérieure à la date de fin.'
                     }
                 }
-
-            # Lancer le calcul automatiquement (sans transaction commit)
             if self.update_mode == 'smart':
                 self._perform_smart_update()
             else:
                 self._perform_calculation()
-
-        except Exception as e:
-            # En cas d'erreur, on ne fait rien pour éviter de bloquer l'interface
+        except Exception:
             pass
 
     def _perform_calculation(self):
-        """Méthode privée pour effectuer le calcul"""
-        # Suppression sélective : seulement les données de la société courante
         domain = []
         if hasattr(self.env['couverture.stock'], 'company_id'):
             domain = [('company_id', '=', self.company_id.id)]
-        else:
-            # Si pas de champ company_id, supprimer toutes les données
-            domain = []
 
         existing_records = self.env['couverture.stock'].search(domain)
         if existing_records:
             existing_records.unlink()
 
-        # Company ID
         company_id = self.company_id.id
-
-        # Calcul jours entre les dates, inclusif
-        delta_days = max(1, (self.date_end - self.date_start).days + 1)
-
-    def _perform_calculation(self):
-        """Méthode privée pour effectuer le calcul"""
-        # Suppression sélective : seulement les données de la société courante
-        domain = []
-        if hasattr(self.env['couverture.stock'], 'company_id'):
-            domain = [('company_id', '=', self.company_id.id)]
-        else:
-            # Si pas de champ company_id, supprimer toutes les données
-            domain = []
-
-        existing_records = self.env['couverture.stock'].search(domain)
-        if existing_records:
-            existing_records.unlink()
-
-        # Company ID
-        company_id = self.company_id.id
-
-        # Calcul jours entre les dates, inclusif
-        delta_days = max(1, (self.date_end - self.date_start).days + 1)
+        delta_days = max(1, (self.date_end - self.date_start).days)
 
         query = """
             WITH ventes_par_produit AS (
-                SELECT sm.product_id, SUM(sm.product_uom_qty) AS total_vendu
+                SELECT 
+                    sm.product_id, 
+                    SUM(sm.product_uom_qty) AS total_vendu
                 FROM stock_move sm
-                JOIN stock_location src ON src.id = sm.location_id
+                JOIN stock_picking_type spt ON sm.picking_type_id = spt.id
                 WHERE sm.state = 'done'
+                  AND spt.code = 'outgoing'
                   AND sm.date BETWEEN %s AND %s
-                  AND sm.picking_type_id IN (
-                      SELECT id FROM stock_picking_type WHERE code = 'outgoing'
-                  )
-                  AND src.company_id = %s  -- Filtrer les ventes par société
+                  AND sm.company_id = %s
+                  AND sm.location_id NOT IN (52, 82)
+                  AND sm.location_dest_id NOT IN (52, 82)
                 GROUP BY sm.product_id
             )
             SELECT 
-                sq.product_id,
+                pp.id AS product_id,
                 pt.name AS product_name,
                 pp.barcode AS product_barcode,
-                sl.company_id,  -- ID de la société
-                rc.name AS company_name,  -- Nom de la société
-                SUM(sq.quantity) AS total_en_stock,
+                rc.id AS company_id,
+                rc.name AS company_name,
+                COALESCE(SUM(sq.quantity), 0) AS total_en_stock,
                 COALESCE(v.total_vendu, 0) AS total_vendu,
                 ROUND(COALESCE(v.total_vendu, 0)::numeric / %s, 2) AS vmj,
                 CASE 
                     WHEN COALESCE(v.total_vendu, 0) = 0 THEN 0
-                    ELSE ROUND(SUM(sq.quantity)::numeric / (COALESCE(v.total_vendu, 0)::numeric / %s), 2)
+                    ELSE ROUND(COALESCE(SUM(sq.quantity), 0)::numeric / (COALESCE(v.total_vendu, 0)::numeric / %s), 2)
                 END AS couverture_stock_en_jours,
                 %s AS couverture_cible,
-                sl.complete_name AS location_name
-            FROM stock_quant sq
-            JOIN product_product pp ON pp.id = sq.product_id
+                string_agg(DISTINCT sl.complete_name, ', ') AS location_name
+            FROM product_product pp
             JOIN product_template pt ON pt.id = pp.product_tmpl_id
-            JOIN stock_location sl ON sl.id = sq.location_id
-            JOIN res_company rc ON rc.id = sl.company_id
-            LEFT JOIN ventes_par_produit v ON v.product_id = sq.product_id
-            WHERE sl.company_id = %s  -- Filtrer les stocks par société
-              AND sl.usage = 'internal'  -- Seulement les emplacements de stock réel
-              AND sq.quantity > 0  -- Éviter les quantités nulles/négatives
-            GROUP BY sq.product_id, pt.name, pp.barcode, v.total_vendu, sl.complete_name, sl.company_id, rc.name
+            JOIN res_company rc ON rc.id = %s
+            LEFT JOIN stock_quant sq ON sq.product_id = pp.id AND sq.company_id = rc.id AND sq.location_id IN (
+                SELECT id FROM stock_location 
+                WHERE usage = 'internal' 
+                  AND company_id = rc.id
+                  AND id NOT IN (52, 82)
+            )
+            LEFT JOIN stock_location sl ON sl.id = sq.location_id
+            LEFT JOIN ventes_par_produit v ON v.product_id = pp.id
+            WHERE pt.active = TRUE
+              AND pt.type = 'product'
+            GROUP BY pp.id, pt.name, pp.barcode, v.total_vendu, rc.id, rc.name
             ORDER BY pt.name
         """
 
         self.env.cr.execute(query, (
             self.date_start,
             self.date_end,
-            company_id,  # Pour filtrer les ventes
+            company_id,
             delta_days,
             delta_days,
             self.couverture_cible,
-            company_id  # Pour filtrer les stocks
+            company_id
         ))
 
         rows = self.env.cr.fetchall()
         columns = [desc[0] for desc in self.env.cr.description]
-
         lang = self.env.lang or 'fr_FR'
 
         records = []
@@ -172,76 +153,90 @@ class CouvertureStockWizard(models.TransientModel):
             if isinstance(name, dict):
                 data['product_name'] = name.get(lang) or next(iter(name.values()))
 
-            data['qte_a_commander'] = max(0, round((data['vmj'] * self.couverture_cible) - (data['total_en_stock'] - (data['vmj'] * 4)), 2))
+            vmj = data['vmj'] or 0
+            stock = data.get('total_en_stock') or 0
+            cible = self.couverture_cible or 0
+            marge = vmj * (self.marge_livraison or 0)
+
+            if stock > marge:
+                qte = (vmj * cible) - (stock - marge)
+            else:
+                qte = vmj * cible
+
+            data['qte_a_commander'] = max(0, round(qte, 2))
+            data['marge_livraison'] = self.marge_livraison or 0
+
             records.append(data)
 
         if records:
             self.env['couverture.stock'].create(records)
 
     def _perform_smart_update(self):
-        """Méthode alternative pour une mise à jour intelligente (upsert)"""
-        # Company ID
         company_id = self.company_id.id
+        delta_days = max(1, (self.date_end - self.date_start).days)
 
-        # Calcul jours entre les dates, inclusif
-        delta_days = max(1, (self.date_end - self.date_start).days + 1)
-
-        # Même requête que _perform_calculation
         query = """
             WITH ventes_par_produit AS (
-                SELECT sm.product_id, SUM(sm.product_uom_qty) AS total_vendu
+                SELECT 
+                    sm.product_id, 
+                    SUM(sm.product_uom_qty) AS total_vendu
                 FROM stock_move sm
-                JOIN stock_location src ON src.id = sm.location_id
+                JOIN stock_picking_type spt ON sm.picking_type_id = spt.id
                 WHERE sm.state = 'done'
+                  AND spt.code = 'outgoing'
                   AND sm.date BETWEEN %s AND %s
-                  AND sm.picking_type_id IN (
-                      SELECT id FROM stock_picking_type WHERE code = 'outgoing'
-                  )
-                  AND src.company_id = %s
+                  AND sm.company_id = %s
+                  AND sm.location_id NOT IN (52, 82)
+                  AND sm.location_dest_id NOT IN (52, 82)
                 GROUP BY sm.product_id
             )
             SELECT 
-                sq.product_id,
+                pp.id AS product_id,
                 pt.name AS product_name,
                 pp.barcode AS product_barcode,
-                sl.company_id,
+                rc.id AS company_id,
                 rc.name AS company_name,
-                SUM(sq.quantity) AS total_en_stock,
+                COALESCE(SUM(sq.quantity), 0) AS total_en_stock,
                 COALESCE(v.total_vendu, 0) AS total_vendu,
                 ROUND(COALESCE(v.total_vendu, 0)::numeric / %s, 2) AS vmj,
                 CASE 
                     WHEN COALESCE(v.total_vendu, 0) = 0 THEN 0
-                    ELSE ROUND(SUM(sq.quantity)::numeric / (COALESCE(v.total_vendu, 0)::numeric / %s), 2)
+                    ELSE ROUND(COALESCE(SUM(sq.quantity), 0)::numeric / (COALESCE(v.total_vendu, 0)::numeric / %s), 2)
                 END AS couverture_stock_en_jours,
                 %s AS couverture_cible,
-                sl.complete_name AS location_name
-            FROM stock_quant sq
-            JOIN product_product pp ON pp.id = sq.product_id
+                string_agg(DISTINCT sl.complete_name, ', ') AS location_name
+            FROM product_product pp
             JOIN product_template pt ON pt.id = pp.product_tmpl_id
-            JOIN stock_location sl ON sl.id = sq.location_id
-            JOIN res_company rc ON rc.id = sl.company_id
-            LEFT JOIN ventes_par_produit v ON v.product_id = sq.product_id
-            WHERE sl.company_id = %s
-              AND sl.usage = 'internal'
-              AND sq.quantity > 0
-            GROUP BY sq.product_id, pt.name, pp.barcode, v.total_vendu, sl.complete_name, sl.company_id, rc.name
+            JOIN res_company rc ON rc.id = %s
+            LEFT JOIN stock_quant sq ON sq.product_id = pp.id AND sq.company_id = rc.id AND sq.location_id IN (
+                SELECT id FROM stock_location 
+                WHERE usage = 'internal' 
+                  AND company_id = rc.id
+                  AND id NOT IN (52, 82)
+            )
+            LEFT JOIN stock_location sl ON sl.id = sq.location_id
+            LEFT JOIN ventes_par_produit v ON v.product_id = pp.id
+            WHERE pt.active = TRUE
+              AND pt.type = 'product'
+            GROUP BY pp.id, pt.name, pp.barcode, v.total_vendu, rc.id, rc.name
             ORDER BY pt.name
         """
 
         self.env.cr.execute(query, (
-            self.date_start, self.date_end, company_id,
-            delta_days, delta_days, self.couverture_cible, company_id
+            self.date_start,
+            self.date_end,
+            company_id,
+            delta_days,
+            delta_days,
+            self.couverture_cible,
+            company_id
         ))
 
         rows = self.env.cr.fetchall()
         columns = [desc[0] for desc in self.env.cr.description]
         lang = self.env.lang or 'fr_FR'
 
-        # Récupérer les enregistrements existants pour cette société
-        existing_domain = []
-        if hasattr(self.env['couverture.stock'], 'company_id'):
-            existing_domain = [('company_id', '=', company_id)]
-
+        existing_domain = [('company_id', '=', company_id)]
         existing_records = self.env['couverture.stock'].search(existing_domain)
         existing_by_product = {rec.product_id.id: rec for rec in existing_records if hasattr(rec, 'product_id')}
 
@@ -254,25 +249,32 @@ class CouvertureStockWizard(models.TransientModel):
             if isinstance(name, dict):
                 data['product_name'] = name.get(lang) or next(iter(name.values()))
 
-            data['qte_a_commander'] = max(0, round((data['vmj'] * self.couverture_cible) - (data['total_en_stock'] - (data['vmj'] * 4)), 2))
+            vmj = data['vmj'] or 0
+            stock = data.get('total_en_stock') or 0
+            cible = self.couverture_cible or 0
+            marge = vmj * (self.marge_livraison or 0)
+
+            if stock > marge:
+                qte = (vmj * cible) - (stock - marge)
+            else:
+                qte = vmj * cible
+
+            data['qte_a_commander'] = max(0, round(qte, 2))
+            data['marge_livraison'] = self.marge_livraison or 0
 
             product_id = data.get('product_id')
             existing_record = existing_by_product.get(product_id)
 
             if existing_record:
-                # Mettre à jour l'enregistrement existant
                 existing_record.write(data)
                 records_to_update.append(existing_record.id)
             else:
-                # Créer un nouveau enregistrement
                 records_to_create.append(data)
 
-        # Créer les nouveaux enregistrements
         if records_to_create:
             self.env['couverture.stock'].create(records_to_create)
 
-        # Supprimer les enregistrements qui n'existent plus dans les nouvelles données
-        updated_product_ids = [row[0] for row in rows]  # product_id est la première colonne
+        updated_product_ids = [row[0] for row in rows]
         records_to_delete = existing_records.filtered(
             lambda r: hasattr(r, 'product_id') and r.product_id.id not in updated_product_ids
         )
@@ -280,14 +282,11 @@ class CouvertureStockWizard(models.TransientModel):
             records_to_delete.unlink()
 
     def action_lancer_calcul(self):
-        """Action manuelle pour lancer le calcul"""
         self.ensure_one()
 
-        # Validation des dates
         if self.date_start > self.date_end:
             raise UserError("La date de début doit être antérieure à la date de fin.")
 
-        # Effectuer le calcul selon le mode choisi
         if self.update_mode == 'smart':
             self._perform_smart_update()
         else:
@@ -306,49 +305,40 @@ class CouvertureStockWizard(models.TransientModel):
         }
 
     def action_voir_resultats(self):
-        """Voir les résultats existants ou recalculer selon le cas."""
         self.ensure_one()
 
-        # Filtrer les données existantes pour la société courante
-        domain = [('company_id', '=', self.company_id.id)] if hasattr(self.env['couverture.stock'],
-                                                                      'company_id') else []
+        domain = [('company_id', '=', self.company_id.id)] if hasattr(self.env['couverture.stock'], 'company_id') else []
         existing_records = self.env['couverture.stock'].search(domain)
 
         if existing_records:
-            # Il y a déjà des données — on remplace
-            # On conserve les paramètres du wizard
             date_start = self.date_start
             date_end = self.date_end
             couverture_cible = self.couverture_cible
             update_mode = self.update_mode
             company_id = self.company_id
+            marge_livraison = self.marge_livraison
 
-            # Supprimer les anciennes données de cette société
             existing_records.unlink()
 
-            # Réappliquer les paramètres au wizard (utile si le recalcul modifie le wizard)
             self.write({
                 'date_start': date_start,
                 'date_end': date_end,
                 'couverture_cible': couverture_cible,
                 'update_mode': update_mode,
                 'company_id': company_id.id,
+                'marge_livraison': marge_livraison,
             })
 
-            # Recalculer avec remplacement
             if update_mode == 'smart':
                 self._perform_smart_update()
             else:
                 self._perform_calculation()
-
         else:
-            # Aucune donnée existante : on fait un calcul normal
             if self.update_mode == 'smart':
                 self._perform_smart_update()
             else:
                 self._perform_calculation()
 
-        # Afficher la vue des résultats
         return {
             'type': 'ir.actions.act_window',
             'name': f'Couverture Stock - {self.company_id.name}',
@@ -360,4 +350,46 @@ class CouvertureStockWizard(models.TransientModel):
                 'search_default_company_id': self.company_id.id,
             },
             'domain': [('company_id', '=', self.company_id.id)],
+        }
+
+    def export_xlsx(self):
+        buffer = io.BytesIO()
+        workbook = xlsxwriter.Workbook(buffer)
+        worksheet = workbook.add_worksheet("Couverture Stock")
+
+        headers = ['Produit', 'Code Barre', 'Stock', 'Total Vendu', 'VMJ', 'Couverture (jours)', 'Qté à Commander']
+        for col_num, header in enumerate(headers):
+            worksheet.write(0, col_num, header)
+
+        records = self.env['couverture.stock'].search([('company_id', '=', self.company_id.id)])
+
+        for row_num, record in enumerate(records, start=1):
+            worksheet.write(row_num, 0, record.product_name)
+            worksheet.write(row_num, 1, record.product_barcode)
+            worksheet.write(row_num, 2, record.total_en_stock)
+            worksheet.write(row_num, 3, record.total_vendu)
+            worksheet.write(row_num, 4, record.vmj)
+            worksheet.write(row_num, 5, record.couverture_stock_en_jours)
+            worksheet.write(row_num, 6, record.qte_a_commander)
+
+        workbook.close()
+        buffer.seek(0)
+
+        export_data = base64.b64encode(buffer.read())
+
+        filename = f"Couverture_Stock_{self.company_id.name}.xlsx"
+
+        export_file = self.env['ir.attachment'].create({
+            'name': filename,
+            'type': 'binary',
+            'datas': export_data,
+            'res_model': self._name,
+            'res_id': self.id,
+            'mimetype': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        })
+
+        return {
+            'type': 'ir.actions.act_url',
+            'url': f'/web/content/{export_file.id}?download=true',
+            'target': 'self',
         }
