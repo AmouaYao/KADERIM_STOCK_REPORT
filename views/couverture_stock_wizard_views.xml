@@ -7,14 +7,14 @@
             <form string="Calcul Couverture Stock">
                 <sheet>
                     <div class="oe_title">
-                        <h1>Calcul de Couverture de Stock</h1>
+                        <h1>Analyse des données de stock </h1>
                     </div>
 
                     <group>
                         <group string="Paramètres">
-                            <field name="company_id"
+                            <field name="company_name"
                                    readonly="1"
-                                   options="{'no_create': True, 'no_edit': True}"/>
+                                   />
                             <field name="date_start"/>
                             <field name="date_end"/>
                             <field name="marge_livraison"/>
@@ -79,8 +79,9 @@
         }</field>
     </record>
 
-    <menuitem id="menu_action_lancer_wizard"
-              name="Lancer le calcul"
-              parent="menu_kaderim_couverture"
+    <menuitem id="menu_kaderim_couverture"
+              name="Proposition de commande"
+              parent="stock.menu_stock_procurement"
+              sequence="15"
               action="action_couverture_stock_wizard"/>
 </odoo>
