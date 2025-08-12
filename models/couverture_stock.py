@@ -14,8 +14,8 @@ class CouvertureStock(models.Model):
     total_vendu = fields.Float(string="Total vendu")
     vmj = fields.Float(string="Vente moyenne journalière")
     couverture_stock_en_jours = fields.Float(string="Couverture de stock")
-    couverture_cible = fields.Integer(string="Cible (jours)")
-    marge_livraison = fields.Integer(string="Marge de livraison (jours)")
+    couverture_cible = fields.Integer(string="Cible ( en jours)")
+    marge_livraison = fields.Integer(string="Delais de livraison(en jours)")
     qte_a_commander = fields.Float(string="Qté à commander")
     location_name = fields.Char(string="Entrepôt")
 

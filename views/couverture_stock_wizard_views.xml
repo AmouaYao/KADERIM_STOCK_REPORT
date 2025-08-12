@@ -12,9 +12,9 @@
 
                     <group>
                         <group string="Paramètres">
-                            <field name="company_name"
+                            <field name="company_id"
                                    readonly="1"
-                                   />
+                                   options="{'no_create': True, 'no_edit': True}"/>
                             <field name="date_start"/>
                             <field name="date_end"/>
                             <field name="marge_livraison"/>

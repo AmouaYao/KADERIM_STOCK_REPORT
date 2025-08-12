@@ -19,13 +19,8 @@ class CouvertureStockWizard(models.TransientModel):
         'res.company',
         string='Societe',
         required=True,
+        readonly=True,
         default=lambda self: self.env.company
-    )
-
-    company_name = fields.Char(
-        string='Société',
-        compute='_compute_company_name',
-        store=False
     )
 
     auto_recalcul = fields.Boolean(
